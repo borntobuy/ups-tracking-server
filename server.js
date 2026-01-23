@@ -12,8 +12,8 @@ const PORT = process.env.PORT || 3000;
 
 // Configuration UPS
 const UPS_CONFIG = {
-  clientId: 'PM8qzBHdUW6PDNGgOtZnL60sKPKunG75ewp4DDblOH4bDntWptjCeL8RMMbVSuiw',
-  clientSecret: 'bmG9IRJwhbe04GJlVnBl3DYipdGTHpiH5FaqaWYdFTXpvLB6',
+  clientId: 'zhxpib2VGdAX5lpYkd1ysvuzYFKw6KvhE9YGG59yIZ5UlO2B',
+  clientSecret: 'GY5BDqDzUQAWyBzKbN1wixhKvA78K9OjgzAoS5GfSWT5ABlF9ASYNFBZnsrkrHvN',
   accountNumber: '0AB268'
 };
 
@@ -149,3 +149,4 @@ app.listen(PORT, () => {
   console.log(`🚀 Serveur UPS Tracking démarré sur le port ${PORT}`);
   console.log(`📦 Compte UPS: ${UPS_CONFIG.accountNumber}`);
 });
+
