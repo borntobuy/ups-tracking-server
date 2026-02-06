@@ -1,152 +1,179 @@
+import express from "express";
+import fetch from "node-fetch";
 
+/* ==============================
+   ENV
+================================ */
+const {
+  SHOPIFY_CLIENT_ID,
+  SHOPIFY_CLIENT_SECRET,
+  SHOPIFY_STORE_DOMAIN,
+  APP_URL,
+  MODE = "RUN"
+} = process.env;
 
-// Serveur Node.js pour l'API UPS
-// Déployez ce fichier sur Render.com (gratuit)
+/* ==============================
+   CONSTANTES SEO
+================================ */
+const PHRASES = [
+  "🇺🇸 US Buyers: 95% of items tariff-free to USA - Fast international shipping",
+  "📦 Worldwide shipping available - Carefully packed for safe delivery",
+  "✈️ Express shipping to US - Most items exempt from customs duties",
+  "🎁 Secure packaging included - Ships within 24-48 hours",
+  "🌍 International delivery - Tracked shipping to all destinations",
+  "⭐ Guaranteed authentic French vintage - Each piece verified and selected in France",
+  "🔍 Carefully curated antique from France - True farmhouse charm",
+  "💎 Museum-quality piece - Authentic French artisan craftsmanship",
+  "🏺 Rare collectible - Genuine French heritage item",
+  "📸 Additional photos available upon request - Ask any questions before purchasing",
+  "💬 Questions welcome - We're here to help you find the perfect piece",
+  "🤝 Expert assistance - Contact us for detailed condition reports",
+  "🏠 Perfect for French country decor, farmhouse styling, or vintage collections",
+  "✨ Ideal for rustic home decor, shabby chic interiors, or antique enthusiasts"
+];
 
-const express = require('express');
-const cors = require('cors');
-const fetch = require('node-fetch');
+const START_TAG = "<!-- SEO_ROTATION_START -->";
+const END_TAG   = "<!-- SEO_ROTATION_END -->";
 
+const PRODUCTS_PER_DAY = MODE === "TEST" ? 1 : 5;
+const POOL_SIZE = 300;
+
+/* ==============================
+   APP / TOKEN
+================================ */
 const app = express();
-const PORT = process.env.PORT || 3000;
+let ACCESS_TOKEN = null;
 
-// Configuration UPS
-const UPS_CONFIG = {
-  clientId: 'zhxpib2VGdAX5lpYkd1ysvuzYFKw6KvhE9YGG59yIZ5UlO2B',
-  clientSecret: 'GY5BDqDzUQAWyBzKbN1wixhKvA78K9OjgzAoS5GfSWT5ABlF9ASYNFBZnsrkrHvN',
-  accountNumber: '0AB268'
-};
+/* ==============================
+   OAUTH SHOPIFY
+================================ */
+app.get("/auth", (req, res) => {
+  const redirectUri = `${APP_URL}/auth/callback`;
 
-// Middleware
-app.use(cors()); // Permet tous les domaines
-app.use(express.json());
+  const authUrl =
+    `https://${SHOPIFY_STORE_DOMAIN}/admin/oauth/authorize` +
+    `?client_id=${SHOPIFY_CLIENT_ID}` +
+    `&scope=read_products,write_products` +
+    `&redirect_uri=${redirectUri}`;
 
-// Cache pour le token OAuth (évite de le régénérer à chaque appel)
-let tokenCache = {
-  token: null,
-  expiresAt: null
-};
-
-// Fonction pour obtenir le token OAuth UPS
-async function getUPSToken() {
-  // Si on a un token valide en cache, on l'utilise
-  if (tokenCache.token && tokenCache.expiresAt > Date.now()) {
-    return tokenCache.token;
-  }
-
-  try {
-    const credentials = Buffer.from(
-      `${UPS_CONFIG.clientId}:${UPS_CONFIG.clientSecret}`
-    ).toString('base64');
-
-    const response = await fetch('https://onlinetools.ups.com/security/v1/oauth/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${credentials}`
-      },
-      body: 'grant_type=client_credentials'
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Erreur OAuth UPS: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    
-    // Mettre en cache (token valide 1h, on prend 55min pour être sûr)
-    tokenCache = {
-      token: data.access_token,
-      expiresAt: Date.now() + (55 * 60 * 1000)
-    };
-
-    return data.access_token;
-  } catch (error) {
-    console.error('Erreur getUPSToken:', error);
-    throw error;
-  }
-}
-
-// Route de test
-app.get('/', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'Serveur UPS Tracking API opérationnel',
-    account: UPS_CONFIG.accountNumber
-  });
+  res.redirect(authUrl);
 });
 
-// Route pour tracker un colis
-app.get('/api/track/:trackingNumber', async (req, res) => {
-  try {
-    const { trackingNumber } = req.params;
-    
-    console.log(`Tracking demandé pour: ${trackingNumber}`);
+app.get("/auth/callback", async (req, res) => {
+  const { code } = req.query;
 
-    // Obtenir le token
-    const token = await getUPSToken();
+  const response = await fetch(
+    `https://${SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: SHOPIFY_CLIENT_ID,
+        client_secret: SHOPIFY_CLIENT_SECRET,
+        code
+      })
+    }
+  );
 
-    // Appeler l'API UPS
-    const response = await fetch(
-      `https://onlinetools.ups.com/api/track/v1/details/${trackingNumber}?locale=fr_FR`,
+  const data = await response.json();
+  ACCESS_TOKEN = data.access_token;
+
+  console.log("✅ Shopify app authorized");
+  res.send("✅ App autorisée. Vous pouvez fermer cette page.");
+});
+
+/* ==============================
+   UTILS
+================================ */
+function cleanDescription(html = "") {
+  const regex = new RegExp(`${START_TAG}[\\s\\S]*?${END_TAG}`, "g");
+  return html.replace(regex, "").trim();
+}
+
+function addPhrase(html, phrase) {
+  const clean = cleanDescription(html);
+  return `${clean}\n\n${START_TAG}\n<p>${phrase}</p>\n${END_TAG}`;
+}
+
+async function shopifyFetch(endpoint, method = "GET", body = null) {
+  const res = await fetch(
+    `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2024-01/${endpoint}`,
+    {
+      method,
+      headers: {
+        "X-Shopify-Access-Token": ACCESS_TOKEN,
+        "Content-Type": "application/json"
+      },
+      body: body ? JSON.stringify(body) : null
+    }
+  );
+  return res.json();
+}
+
+/* ==============================
+   ROUTE /run (appelée par Render Cron Job)
+================================ */
+app.get("/run", async (req, res) => {
+  if (!ACCESS_TOKEN) {
+    console.log("❌ App non autorisée – /run annulé");
+    res.send("❌ App non autorisée");
+    return;
+  }
+
+  console.log("▶️ Rotation SEO déclenchée");
+
+  const data = await shopifyFetch("products.json?limit=250");
+  const products = data.products
+    .filter(p => p.status === "active")
+    .slice(0, POOL_SIZE);
+
+  if (!products.length) {
+    console.log("⚠️ Aucun produit trouvé");
+    res.send("⚠️ Aucun produit trouvé");
+    return;
+  }
+
+  const dayIndex = Math.floor(Date.now() / (1000 * 60 * 60 * 24));
+  const phrase = PHRASES[dayIndex % PHRASES.length];
+
+  const startIndex = (dayIndex * PRODUCTS_PER_DAY) % products.length;
+  const selected = products.slice(startIndex, startIndex + PRODUCTS_PER_DAY);
+
+  for (const product of selected) {
+    const newBody =
+      MODE === "CLEAN"
+        ? cleanDescription(product.body_html)
+        : addPhrase(product.body_html, phrase);
+
+    await shopifyFetch(
+      `products/${product.id}.json`,
+      "PUT",
       {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'transId': `fleamarket-${Date.now()}`,
-          'transactionSrc': 'fleamarketfrance'
+        product: {
+          id: product.id,
+          body_html: newBody
         }
       }
     );
 
-    if (!response.ok) {
-      if (response.status === 404) {
-        return res.status(404).json({
-          error: 'Numéro de tracking non trouvé',
-          trackingNumber
-        });
-      }
-      
-      const errorText = await response.text();
-      throw new Error(`UPS API Error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    
-    console.log(`Tracking réussi pour: ${trackingNumber}`);
-    
-    res.json(data);
-  } catch (error) {
-    console.error('Erreur tracking:', error);
-    res.status(500).json({ 
-      error: error.message,
-      trackingNumber: req.params.trackingNumber
-    });
+    console.log(`✔️ Produit ${product.id} mis à jour`);
   }
+
+  console.log("✅ Rotation terminée");
+  res.send("✅ Rotation exécutée");
 });
 
-// Route pour tester la connexion UPS
-app.get('/api/test', async (req, res) => {
-  try {
-    const token = await getUPSToken();
-    res.json({ 
-      status: 'OK', 
-      message: 'Connexion UPS réussie',
-      tokenObtained: !!token
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'ERROR', 
-      message: error.message 
-    });
-  }
+/* ==============================
+   ROOT (optionnel)
+================================ */
+app.get("/", (req, res) => {
+  res.send("✅ Shopify SEO Rotation App running");
 });
 
-// Démarrage du serveur
+/* ==============================
+   SERVER
+================================ */
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Serveur UPS Tracking démarré sur le port ${PORT}`);
-  console.log(`📦 Compte UPS: ${UPS_CONFIG.accountNumber}`);
+  console.log(`🚀 App running on port ${PORT}`);
 });
-
