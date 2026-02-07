@@ -1,70 +1,76 @@
-const BACKEND_URL = 'https://ups-tracking-server-1.onrender.com';
+const express = require('express');
+const cors = require('cors');
+const fetch = require('node-fetch');
 
-async function fetchTracking(trackingNumber) {
-    const response = await fetch(`${BACKEND_URL}/api/track/${trackingNumber}`);
-    if (!response.ok) throw new Error('Erreur API UPS');
-    return response.json();
-}
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-function firstOrSelf(value) {
-    return Array.isArray(value) ? value[0] : value;
-}
+app.use(cors());
+app.use(express.json());
 
-document.getElementById('analyzeBtn').onclick = async () => {
-    const input = document.getElementById('trackingInput').value;
-    const numbers = input.split('\n').map(n => n.trim()).filter(Boolean);
+let upsToken = null;
+let tokenExpiration = 0;
 
-    const tbody = document.getElementById('resultsBody');
-    tbody.innerHTML = '';
-    document.getElementById('results').classList.add('hidden');
-    document.getElementById('error').classList.add('hidden');
+async function getUpsToken() {
+    const now = Date.now();
+    if (upsToken && now < tokenExpiration) return upsToken;
 
-    if (numbers.length === 0) {
-        document.getElementById('error').textContent = 'Entrez au moins un numéro UPS';
-        document.getElementById('error').classList.remove('hidden');
-        return;
-    }
+    const auth = Buffer.from(
+        `${process.env.UPS_CLIENT_ID}:${process.env.UPS_CLIENT_SECRET}`
+    ).toString('base64');
 
-    try {
-        for (const number of numbers) {
-            const data = await fetchTracking(number);
-
-            const shipment = firstOrSelf(data?.trackResponse?.shipment);
-            const pkg = firstOrSelf(shipment?.package);
-            const activity = firstOrSelf(pkg?.activity);
-
-            const status =
-                activity?.status?.description ||
-                activity?.status?.code ||
-                'Statut inconnu';
-
-            const service =
-                shipment?.service?.description ||
-                shipment?.service?.code ||
-                'Service inconnu';
-
-            const delivery =
-                pkg?.deliveryDate?.[0]?.date ||
-                pkg?.deliveryDate?.date ||
-                'En cours';
-
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td class="p-2 font-mono text-xs">${number}</td>
-                <td class="p-2">${status}</td>
-                <td class="p-2">${service}</td>
-                <td class="p-2">${delivery}</td>
-            `;
-            tbody.appendChild(tr);
+    const response = await fetch(
+        'https://onlinetools.ups.com/security/v1/oauth/token',
+        {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: 'grant_type=client_credentials'
         }
+    );
 
-        document.getElementById('results').classList.remove('hidden');
+    const data = await response.json();
+
+    upsToken = data.access_token;
+    tokenExpiration = now + (data.expires_in - 60) * 1000;
+
+    return upsToken;
+}
+
+app.get('/api/track/:trackingNumber', async (req, res) => {
+    try {
+        const token = await getUpsToken();
+        const trackingNumber = req.params.trackingNumber;
+
+        const response = await fetch(
+            `https://onlinetools.ups.com/api/track/v1/details/${trackingNumber}`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    'transId': Date.now().toString(),
+                    'transactionSrc': 'ups-tracker'
+                }
+            }
+        );
+
+        const data = await response.json();
+        res.json(data);
 
     } catch (err) {
-        document.getElementById('error').textContent = err.message;
-        document.getElementById('error').classList.remove('hidden');
+        res.status(500).json({
+            error: 'UPS API error',
+            details: err.message
+        });
     }
-};
+});
 
+app.get('/', (req, res) => {
+    res.json({ status: 'OK', message: 'UPS Tracking API running' });
+});
 
-
+app.listen(PORT, () => {
+    console.log(`UPS Tracking server running on port ${PORT}`);
+});
