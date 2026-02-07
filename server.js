@@ -1,4 +1,3 @@
-<script>
 const BACKEND_URL = 'https://ups-tracking-server-1.onrender.com';
 
 async function fetchTracking(trackingNumber) {
@@ -67,3 +66,4 @@ document.getElementById('analyzeBtn').onclick = async () => {
     }
 };
 </script>
+
