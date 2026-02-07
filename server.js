@@ -65,5 +65,6 @@ document.getElementById('analyzeBtn').onclick = async () => {
         document.getElementById('error').classList.remove('hidden');
     }
 };
-</script>
+
+
 
